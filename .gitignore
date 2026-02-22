@@ -1,0 +1,24 @@
+# Секреты (САМОЕ ВАЖНОЕ!)
+.env
+
+# Виртуальное окружение (Никогда не пушим!)
+.venv/
+venv/
+env/
+ENV/
+
+# Кэш Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Кэш инструментов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Конфиги VS Code
+.vscode/
+
+# Системные файлы
+.DS_Store
