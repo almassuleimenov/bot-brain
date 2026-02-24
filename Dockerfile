@@ -1,6 +1,5 @@
 # Используем легкий официальный образ Python
-FROM python:3.11-slim
-
+FROM python:3.13-slim 
 # Устанавливаем системные зависимости (нужны для сборки некоторых пакетов)
 RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 
