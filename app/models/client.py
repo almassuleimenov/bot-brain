@@ -3,7 +3,7 @@ from app.core.database import Base
 
 
 class Client(Base):
-    __tablename__ = "clients"
+    __tablename__ = "ai_bot_clients"
 
     id = Column(Integer, primary_key=True, index=True)
     chat_id = Column(BigInteger, unique=True, index=True)
