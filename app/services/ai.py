@@ -12,7 +12,9 @@ if not api_key:
 client = AsyncGroq(api_key=api_key)
 
 
-async def generate_reply_with_ai(user_text: str, projects_data: list , history : str = "") -> str:
+async def generate_reply_with_ai(
+    user_text: str, projects_data: list, history: str = ""
+) -> str:
     projects_text = json.dumps(projects_data, ensure_ascii=False, indent=2)
 
     # Системный Промпт (Инструкция)

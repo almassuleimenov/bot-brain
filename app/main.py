@@ -8,6 +8,7 @@ from app.core.database import engine, Base, get_db
 from app.models.client import Client
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from app.services.audio import transcribe_audio_from_url
 
 
 @asynccontextmanager
@@ -27,6 +28,25 @@ app = FastAPI(title="Bot Brain (AI Microservice)", lifespan=lifespan)
 async def generate_answer(
     request: GenerateAnswerRequest, db: AsyncSession = Depends(get_db)
 ):
+    final_user_text = request.user_text
+
+    if request.voice_url:
+        print(f"🎤 Получена ссылка на голосовое: {request.voice_url[:30]}...")
+
+        transcribed_text = await transcribe_audio_from_url(request.voice_url)
+
+        if transcribed_text:
+            final_user_text = transcribed_text
+        else:
+            return GenerateAnswerResponse(
+                reply="Извините, я не смог разобрать ваше голосовое сообщение. Можете написать текстом?"
+            )
+
+    if not final_user_text:
+        return GenerateAnswerResponse(
+            reply="Пожалуйста, отправьте текст или голосовое сообщение."
+        )
+
     result = await db.execute(select(Client).where(Client.chat_id == request.chat_id))
     client = result.scalars().first()
 
@@ -47,14 +67,13 @@ async def generate_answer(
 
     print("ИИ думает.....")
 
-    ai_reply = await generate_reply_with_ai(request.user_text, projects, client.context)
-     
-    
+    ai_reply = await generate_reply_with_ai(final_user_text, projects, client.context)
+
     print("Ответ ИИ готов для дурова!!")
-    
-    new_context = f"{client.context}\nКлиент: {request.user_text}\nИИ: {ai_reply}"
-    
-    client.context = new_context[-1000:] 
+
+    new_context = f"{client.context}\nКлиент: {final_user_text}\nИИ: {ai_reply}"
+
+    client.context = new_context[-1000:]
     await db.commit()
 
     return GenerateAnswerResponse(reply=ai_reply)
