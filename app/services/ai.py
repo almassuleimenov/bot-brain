@@ -47,7 +47,7 @@ async def generate_reply_with_ai(
                 {"role": "user", "content": user_text},
             ],
             model="llama-3.3-70b-versatile",
-            temperature=0.7,
+            temperature=0.6,
         )
         return response.choices[0].message.content.strip()
 
