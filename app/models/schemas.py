@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class GenerateAnswerRequest(BaseModel):
-    chat_id: int
+    chat_id: str
     user_text: str = ""
     voice_url: Optional[str] = None
 
