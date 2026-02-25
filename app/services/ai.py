@@ -18,7 +18,7 @@ async def generate_reply_with_ai(
     projects_text = json.dumps(projects_data, ensure_ascii=False, indent=2)
 
     # Системный Промпт (Инструкция)
-    SYSTEM_PROMPT = """
+    system_prompt = """
     Ты — Томирис, приветливый, эмпатичный и очень человечный менеджер по работе с клиентами в премиальном архитектурном бюро "SNP-ARCH". 
     Твой руководитель и главный архитектор — Нурдаулет Сулейменов.
 
