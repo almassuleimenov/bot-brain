@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GREEN_API_URL = os.getenv("GREEN_API_URL", "https://api.green-api.com")
-GREEN_API_INSTANCE = os.getenv("GREEN_API_INSTANCE")
+GREEN_API_ID = os.getenv("GREEN_API_ID") # <--- ПОМЕНЯЛИ ИМЯ ЗДЕСЬ
 GREEN_API_TOKEN = os.getenv("GREEN_API_TOKEN")
 
 
@@ -13,12 +13,12 @@ async def send_whatsapp_message(chat_id: str, message: str):
     """
     Отправляет текстовое сообщение в WhatsApp через Green-API.
     """
-    if not GREEN_API_INSTANCE or not GREEN_API_TOKEN:
+    if not GREEN_API_ID or not GREEN_API_TOKEN:
         print("❌ Ошибка: Нет данных Green-API в .env")
         return False
 
     url = (
-        f"{GREEN_API_URL}/waInstance{GREEN_API_INSTANCE}/sendMessage/{GREEN_API_TOKEN}"
+        f"{GREEN_API_URL}/waInstance{GREEN_API_ID}/sendMessage/{GREEN_API_TOKEN}" # <--- И ЗДЕСЬ
     )
     payload = {"chatId": chat_id, "message": message}
 
