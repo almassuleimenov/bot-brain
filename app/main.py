@@ -146,13 +146,51 @@ async def generate_answer(
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     data = await request.json()
 
-    if "message" not in data or "text" not in data["message"]:
+    # Проверяем, что пришло вообще хоть какое-то сообщение
+    if "message" not in data:
         return {"status": "ok"} 
 
-    chat_id = str(data["message"]["chat"]["id"])
-    user_text = data["message"]["text"]
+    message = data["message"]
+    chat_id = str(message["chat"]["id"])
+    user_text = ""
 
-    # 1. Ищем клиента в базе (ID телеграма)
+    # --- 1. ПРОВЕРЯЕМ: ТЕКСТ ИЛИ ГОЛОСОВОЕ? ---
+    if "text" in message:
+        user_text = message["text"]
+        
+    elif "voice" in message:
+        print(f"🎤 Получено голосовое из Telegram от {chat_id}!")
+        file_id = message["voice"]["file_id"]
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        
+        # Запрашиваем у Телеграма путь к файлу
+        import httpx
+        async with httpx.AsyncClient() as client_http:
+            try:
+                # Получаем file_path
+                file_info_resp = await client_http.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}")
+                file_info = file_info_resp.json()
+                
+                if file_info.get("ok"):
+                    file_path = file_info["result"]["file_path"]
+                    # Формируем прямую ссылку на скачивание 
+                    voice_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+                    
+                    # Отправляем в твой Whisper (audio.py)
+                    user_text = await transcribe_audio_from_url(voice_url)
+                    
+                    if not user_text:
+                        await send_telegram_message(chat_id, "Извините, я не смогла разобрать голосовое сообщение. Можете написать текстом? 🌸")
+                        return {"status": "ok"}
+            except Exception as e:
+                print(f"❌ Ошибка загрузки войса из Телеги: {e}")
+                return {"status": "ok"}
+
+    # Если в сообщении нет ни текста, ни аудио (например, прислали стикер) - выходим
+    if not user_text:
+         return {"status": "ok"}
+
+    # --- 2. ИЩЕМ КЛИЕНТА В БАЗЕ ---
     result = await db.execute(select(Client).where(Client.chat_id == chat_id))
     client = result.scalars().first()
 
@@ -163,20 +201,23 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         await db.refresh(client)
         print(f"🆕 В базу добавлен НОВЫЙ клиент (Telegram): {chat_id}")
 
-    # 2. Генерируем ответ Томирис
+    # --- 3. ГЕНЕРИРУЕМ ОТВЕТ ТОМИРИС ---
     projects = await fetch_projects_from_sanity()
     ai_reply = await generate_reply_with_ai(user_text, projects, client.context)
 
-    # 3. Сохраняем память
+    # --- 4. СОХРАНЯЕМ ПАМЯТЬ ---
     new_context = f"{client.context}\nКлиент: {user_text}\nТомирис: {ai_reply}"
     if len(new_context) > 2000:
         new_context = "..." + new_context[-2000:]
     client.context = new_context
     await db.commit()
 
-    # 4. Проверка на БИНГО!
-    magic_phrase = "Я передала всю информацию главному архитектору"
-    if magic_phrase in ai_reply:
+    # --- 5. ГИБКАЯ ПРОВЕРКА НА БИНГО! (АНКЕТА) ---
+    magic_phrase = "передала всю информацию главному архитектору"
+    
+    # Ищем фразу без учета регистра (даже если Томирис добавит эмодзи - сработает!)
+    if magic_phrase in ai_reply.lower():
+        print(f"🔔 БИНГО! Клиент {chat_id} готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
         summary = await generate_client_summary(new_context, chat_id)
         architect_phone = os.getenv("ARCHITECT_PHONE")
@@ -184,8 +225,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if architect_phone:
             # Отправляем анкету боссу в Ватсап с пометкой Телеграма
             await send_whatsapp_message(architect_phone, f"🔵 [ИЗ TELEGRAM]\n{summary}")
+        else:
+            print("❌ Номер архитектора (ARCHITECT_PHONE) не найден в .env!")
 
-    # 5. Отправляем ответ клиенту в Телеграм
+    # --- 6. ОТПРАВЛЯЕМ ОТВЕТ КЛИЕНТУ В ТЕЛЕГРАМ ---
     await send_telegram_message(chat_id, ai_reply)
 
     return {"status": "ok"}
