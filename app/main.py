@@ -71,9 +71,12 @@ async def generate_answer(
 
     print("Ответ ИИ готов для дурова!!")
 
-    new_context = f"{client.context}\nКлиент: {final_user_text}\nИИ: {ai_reply}"
+    new_context = f"{client.context}\nКлиент: {final_user_text}\nТомирис: {ai_reply}"
+    
+    if len(new_context) > 2000:
+        new_context = "..." + new_context[-2000:] 
 
-    client.context = new_context[-1000:]
+    client.context = new_context
     await db.commit()
 
     return GenerateAnswerResponse(reply=ai_reply)
