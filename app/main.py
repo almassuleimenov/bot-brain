@@ -213,20 +213,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     await db.commit()
 
     # --- 5. ГИБКАЯ ПРОВЕРКА НА БИНГО! (АНКЕТА) ---
-    magic_phrase = "передала всю информацию главному архитектору"
-    
-    # Ищем фразу без учета регистра (даже если Томирис добавит эмодзи - сработает!)
+    magic_phrase = "передала всю информацию главному архитектору"   
     if magic_phrase in ai_reply.lower():
         print(f"🔔 БИНГО! Клиент {chat_id} готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
         summary = await generate_client_summary(new_context, chat_id)
-        architect_phone = os.getenv("ARCHITECT_PHONE")
         
-        if architect_phone:
-            # Отправляем анкету боссу в Ватсап с пометкой Телеграма
-            await send_whatsapp_message(architect_phone, f"🔵 [ИЗ TELEGRAM]\n{summary}")
+        # 🔑 БЕРЕМ ID ТЕЛЕГРАМА НУРДАУЛЕТА (ВМЕСТО ВАТСАПА)
+        architect_tg_id = os.getenv("ARCHITECT_TG_ID")
+        
+        if architect_tg_id:
+            # 🚀 ОТПРАВЛЯЕМ АНКЕТУ БОССУ В ТЕЛЕГРАМ!
+            await send_telegram_message(architect_tg_id, f"🔵 [ИЗ TELEGRAM]\n{summary}")
         else:
-            print("❌ Номер архитектора (ARCHITECT_PHONE) не найден в .env!")
+            print("❌ ID архитектора (ARCHITECT_TG_ID) не найден в .env!")
 
     # --- 6. ОТПРАВЛЯЕМ ОТВЕТ КЛИЕНТУ В ТЕЛЕГРАМ ---
     await send_telegram_message(chat_id, ai_reply)
