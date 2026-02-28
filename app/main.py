@@ -78,5 +78,20 @@ async def generate_answer(
 
     client.context = new_context
     await db.commit()
+    
+    
+    magic_phrase = "Я передала всю информацию главному архитектору"    
+    
+    if magic_phrase in ai_reply:
+        print(f"🔔 БИНГО! Клиент {request.chat_id} готов. Генерируем анкету...")
+        
+        # Запускаем нашу новую функцию (не забудь импортировать ее сверху файла!)
+        from app.services.ai import generate_client_summary
+        
+        # Очищаем chat_id от @c.us для красоты
+        clean_phone = request.chat_id.replace("@c.us", "") 
+        
+        summary = await generate_client_summary(new_context, clean_phone)
+        print(f"📄 АНКЕТА ГОТОВА:\n{summary}")
 
     return GenerateAnswerResponse(reply=ai_reply)
