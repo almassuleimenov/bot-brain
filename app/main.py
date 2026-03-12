@@ -39,7 +39,7 @@ async def generate_answer(
         if transcribed_text:
             final_user_text = transcribed_text
         else:
-            return GenerateAnswerResponse(reply="Извините, я не смог разобрать ваше голосовое сообщение. Можете написать текстом?")
+            return GenerateAnswerResponse(reply="Извините, я не смогла разобрать ваше голосовое сообщение. Можете написать текстом? 🌸")
 
     if not final_user_text:
         return GenerateAnswerResponse(reply="Пожалуйста, отправьте текст или голосовое сообщение.")
@@ -58,27 +58,40 @@ async def generate_answer(
     projects = await fetch_projects_from_sanity()
     ai_reply = await generate_reply_with_ai(final_user_text, projects, client.context)
 
+    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ)
     new_context = f"{client.context}\nКлиент: {final_user_text}\nТомирис: {ai_reply}"
     if len(new_context) > 2000:
-        new_context = "..." + new_context[-2000:]
+        lines = new_context.split('\n')
+        new_context = "...\n" + "\n".join(lines[-20:]) # Берем последние 20 строк диалога
     client.context = new_context
     await db.commit()
 
-    # --- ГИБКАЯ ПРОВЕРКА НА БИНГО! (АНКЕТА ДЛЯ ВАТСАПА) ---
-    magic_phrase = "передала всю информацию главному архитектору"
-    
-    if magic_phrase in ai_reply.lower():
-        print(f"🔔 БИНГО! Клиент {request.chat_id} готов. Генерируем анкету...")
+    # --- ГИБКАЯ ПРОВЕРКА НА БИНГО И ОБНОВЛЕНИЯ ---
+    reply_lower = ai_reply.lower()
+    architect_tg_id = os.getenv("ARCHITECT_TG_ID")
+
+    # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
+    if "передала всю информацию главному архитектору" in reply_lower:
+        print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
         
-        clean_phone = request.chat_id.replace("@c.us", "")
-        summary = await generate_client_summary(new_context, clean_phone)
+        clean_phone = request.chat_id.replace("@c.us", "") if "@c.us" in str(request.chat_id) else request.chat_id
         
-        architect_tg_id = os.getenv("ARCHITECT_TG_ID")
+        summary = await generate_client_summary(new_context, clean_phone)
         if architect_tg_id:
-            await send_telegram_message(architect_tg_id, f"🟢 [ИЗ WHATSAPP]\n{summary}")
-        else:
-            print("❌ ID архитектора (ARCHITECT_TG_ID) не найден в .env!")
+            await send_telegram_message(architect_tg_id, f"🟢 [НОВЫЙ ЛИД ИЗ WHATSAPP]\n{summary}")
+            
+    # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
+    elif "обновила информацию для архитектора" in reply_lower:
+        print(f"⚠️ Клиент обновил данные по времени!")
+        if architect_tg_id:
+            clean_phone = request.chat_id.replace("@c.us", "")
+            update_msg = (
+                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {request.chat_id}</b>\n\n"
+                f"<b>Ответ клиента:</b> <i>{final_user_text}</i>\n\n"
+                f"👇 <i>Для подтверждения отправьте:</i>\n<code>1 {clean_phone}</code>"
+            )
+            await send_telegram_message(architect_tg_id, update_msg)
 
     return GenerateAnswerResponse(reply=ai_reply)
 
@@ -208,25 +221,39 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     projects = await fetch_projects_from_sanity()
     ai_reply = await generate_reply_with_ai(user_text, projects, client.context)
 
-    # --- 4. СОХРАНЯЕМ ПАМЯТЬ ---
+    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ)
     new_context = f"{client.context}\nКлиент: {user_text}\nТомирис: {ai_reply}"
     if len(new_context) > 2000:
-        new_context = "..." + new_context[-2000:]
+        lines = new_context.split('\n')
+        new_context = "...\n" + "\n".join(lines[-20:])
     client.context = new_context
     await db.commit()
 
-    # --- 5. ГИБКАЯ ПРОВЕРКА НА БИНГО! (АНКЕТА) ---
-    magic_phrase = "передала всю информацию главному архитектору" 
-    if magic_phrase in ai_reply.lower():
-        print(f"🔔 БИНГО! Клиент {chat_id} готов. Генерируем анкету...")
+    # --- 5. ГИБКАЯ ПРОВЕРКА НА БИНГО И ОБНОВЛЕНИЯ ---
+    reply_lower = ai_reply.lower()
+
+    # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
+    if "передала всю информацию главному архитектору" in reply_lower:
+        print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
-        summary = await generate_client_summary(new_context, chat_id)
         
-        architect_tg_id = os.getenv("ARCHITECT_TG_ID")
+        clean_phone = chat_id.replace("@c.us", "") if "@c.us" in str(chat_id) else chat_id
+        
+        summary = await generate_client_summary(new_context, clean_phone)
         if architect_tg_id:
-            await send_telegram_message(architect_tg_id, f"🔵 [ИЗ TELEGRAM]\n{summary}")
-        else:
-            print("❌ ID архитектора (ARCHITECT_TG_ID) не найден в .env!")
+            await send_telegram_message(architect_tg_id, f"🔵 [НОВЫЙ ЛИД ИЗ TELEGRAM]\n{summary}")
+            
+    # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
+    elif "обновила информацию для архитектора" in reply_lower:
+        print(f"⚠️ Клиент обновил данные по времени!")
+        if architect_tg_id:
+            clean_phone = chat_id.replace("@c.us", "") if "@c.us" in str(chat_id) else chat_id
+            update_msg = (
+                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {clean_phone}</b>\n\n"
+                f"<b>Ответ клиента:</b> <i>{user_text}</i>\n\n"
+                f"👇 <i>Для подтверждения отправьте:</i>\n<code>1 {clean_phone}</code>"
+            )
+            await send_telegram_message(architect_tg_id, update_msg)
 
     # --- 6. ОТПРАВЛЯЕМ ОТВЕТ КЛИЕНТУ В ТЕЛЕГРАМ ---
     await send_telegram_message(chat_id, ai_reply)
