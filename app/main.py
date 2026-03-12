@@ -56,22 +56,25 @@ async def generate_answer(
         print(f"🆕 В базу добавлен НОВЫЙ клиент (WhatsApp): {request.chat_id}")
 
     projects = await fetch_projects_from_sanity()
-    ai_reply = await generate_reply_with_ai(final_user_text, projects, client.context)
+    
+    # 🚨 ИИ ТЕПЕРЬ ВОЗВРАЩАЕТ СЛОВАРЬ (JSON)
+    ai_response_data = await generate_reply_with_ai(final_user_text, projects, client.context)
+    ai_reply_text = ai_response_data.get("reply", "Простите, техническая заминка.")
+    ai_action = ai_response_data.get("action", "none")
 
-    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ)
-    new_context = f"{client.context}\nКлиент: {final_user_text}\nТомирис: {ai_reply}"
+    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ) - СОХРАНЯЕМ ТОЛЬКО ТЕКСТ
+    new_context = f"{client.context}\nКлиент: {final_user_text}\nТомирис: {ai_reply_text}"
     if len(new_context) > 2000:
         lines = new_context.split('\n')
         new_context = "...\n" + "\n".join(lines[-20:]) # Берем последние 20 строк диалога
     client.context = new_context
     await db.commit()
 
-    # --- ГИБКАЯ ПРОВЕРКА НА БИНГО И ОБНОВЛЕНИЯ ---
-    reply_lower = ai_reply.lower()
+    # --- СТРОГАЯ ПРОВЕРКА ПО СИСТЕМНОМУ СТАТУСУ (JSON ACTION) ---
     architect_tg_id = os.getenv("ARCHITECT_TG_ID")
 
     # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
-    if "передала всю информацию главному архитектору" in reply_lower:
+    if ai_action == "new_booking":
         print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
         
@@ -82,7 +85,7 @@ async def generate_answer(
             await send_telegram_message(architect_tg_id, f"🟢 [НОВЫЙ ЛИД ИЗ WHATSAPP]\n{summary}")
             
     # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
-    elif "обновила информацию для архитектора" in reply_lower:
+    elif ai_action == "reschedule":
         print(f"⚠️ Клиент обновил данные по времени!")
         if architect_tg_id:
             clean_phone = request.chat_id.replace("@c.us", "")
@@ -93,7 +96,8 @@ async def generate_answer(
             )
             await send_telegram_message(architect_tg_id, update_msg)
 
-    return GenerateAnswerResponse(reply=ai_reply)
+    # ВОЗВРАЩАЕМ КЛИЕНТУ ТОЛЬКО ТЕКСТ
+    return GenerateAnswerResponse(reply=ai_reply_text)
 
 # ==========================================
 # 🟦 БЛОК 2: ТЕЛЕГРАМ (И ПЕРЕХВАТЧИК БОССА)
@@ -219,21 +223,23 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
     # --- 3. ГЕНЕРИРУЕМ ОТВЕТ ТОМИРИС ---
     projects = await fetch_projects_from_sanity()
-    ai_reply = await generate_reply_with_ai(user_text, projects, client.context)
+    
+    # 🚨 ИИ ТЕПЕРЬ ВОЗВРАЩАЕТ СЛОВАРЬ (JSON)
+    ai_response_data = await generate_reply_with_ai(user_text, projects, client.context)
+    ai_reply_text = ai_response_data.get("reply", "Простите, техническая заминка.")
+    ai_action = ai_response_data.get("action", "none")
 
-    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ)
-    new_context = f"{client.context}\nКлиент: {user_text}\nТомирис: {ai_reply}"
+    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ) - СОХРАНЯЕМ ТОЛЬКО ТЕКСТ
+    new_context = f"{client.context}\nКлиент: {user_text}\nТомирис: {ai_reply_text}"
     if len(new_context) > 2000:
         lines = new_context.split('\n')
         new_context = "...\n" + "\n".join(lines[-20:])
     client.context = new_context
     await db.commit()
 
-    # --- 5. ГИБКАЯ ПРОВЕРКА НА БИНГО И ОБНОВЛЕНИЯ ---
-    reply_lower = ai_reply.lower()
-
+    # --- СТРОГАЯ ПРОВЕРКА ПО СИСТЕМНОМУ СТАТУСУ (JSON ACTION) ---
     # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
-    if "передала всю информацию главному архитектору" in reply_lower:
+    if ai_action == "new_booking":
         print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
         
@@ -244,7 +250,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await send_telegram_message(architect_tg_id, f"🔵 [НОВЫЙ ЛИД ИЗ TELEGRAM]\n{summary}")
             
     # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
-    elif "обновила информацию для архитектора" in reply_lower:
+    elif ai_action == "reschedule":
         print(f"⚠️ Клиент обновил данные по времени!")
         if architect_tg_id:
             clean_phone = chat_id.replace("@c.us", "") if "@c.us" in str(chat_id) else chat_id
@@ -256,6 +262,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await send_telegram_message(architect_tg_id, update_msg)
 
     # --- 6. ОТПРАВЛЯЕМ ОТВЕТ КЛИЕНТУ В ТЕЛЕГРАМ ---
-    await send_telegram_message(chat_id, ai_reply)
+    await send_telegram_message(chat_id, ai_reply_text)
 
     return {"status": "ok"}
