@@ -44,7 +44,6 @@ async def generate_answer(
     if not final_user_text:
         return GenerateAnswerResponse(reply="Пожалуйста, отправьте текст или голосовое сообщение.")
 
-    # --- СТАНДАРТНАЯ ЛОГИКА ВАТСАПА ---
     result = await db.execute(select(Client).where(Client.chat_id == request.chat_id))
     client = result.scalars().first()
 
@@ -57,46 +56,36 @@ async def generate_answer(
 
     projects = await fetch_projects_from_sanity()
     
-    # 🚨 ИИ ТЕПЕРЬ ВОЗВРАЩАЕТ СЛОВАРЬ (JSON)
     ai_response_data = await generate_reply_with_ai(final_user_text, projects, client.context)
     ai_reply_text = ai_response_data.get("reply", "Простите, техническая заминка.")
     ai_action = ai_response_data.get("action", "none")
 
-    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ) - СОХРАНЯЕМ ТОЛЬКО ТЕКСТ
     new_context = f"{client.context}\nКлиент: {final_user_text}\nТомирис: {ai_reply_text}"
     if len(new_context) > 2000:
         lines = new_context.split('\n')
-        new_context = "...\n" + "\n".join(lines[-20:]) # Берем последние 20 строк диалога
+        new_context = "...\n" + "\n".join(lines[-20:]) 
     client.context = new_context
     await db.commit()
 
-    # --- СТРОГАЯ ПРОВЕРКА ПО СИСТЕМНОМУ СТАТУСУ (JSON ACTION) ---
     architect_tg_id = os.getenv("ARCHITECT_TG_ID")
+    clean_phone = request.chat_id.replace("@c.us", "") if "@c.us" in str(request.chat_id) else request.chat_id
 
-    # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
     if ai_action == "new_booking":
-        print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
-        
-        clean_phone = request.chat_id.replace("@c.us", "") if "@c.us" in str(request.chat_id) else request.chat_id
-        
-        summary = await generate_client_summary(new_context, clean_phone)
+        # Передаем жестко "WhatsApp" и чистый номер
+        summary = await generate_client_summary(new_context, clean_phone, "WhatsApp")
         if architect_tg_id:
             await send_telegram_message(architect_tg_id, f"🟢 [НОВЫЙ ЛИД ИЗ WHATSAPP]\n{summary}")
             
-    # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
     elif ai_action == "reschedule":
-        print(f"⚠️ Клиент обновил данные по времени!")
         if architect_tg_id:
-            clean_phone = request.chat_id.replace("@c.us", "")
             update_msg = (
-                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {request.chat_id}</b>\n\n"
+                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {clean_phone}</b>\n\n"
                 f"<b>Ответ клиента:</b> <i>{final_user_text}</i>\n\n"
                 f"👇 <i>Для подтверждения отправьте:</i>\n<code>1 {clean_phone}</code>"
             )
             await send_telegram_message(architect_tg_id, update_msg)
 
-    # ВОЗВРАЩАЕМ КЛИЕНТУ ТОЛЬКО ТЕКСТ
     return GenerateAnswerResponse(reply=ai_reply_text)
 
 # ==========================================
@@ -115,25 +104,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
     if "text" in message:
         user_text = message["text"]
-        
     elif "voice" in message:
-        print(f"🎤 Получено голосовое из Telegram от {chat_id}!")
         file_id = message["voice"]["file_id"]
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        
         import httpx
         async with httpx.AsyncClient() as client_http:
             try:
                 file_info_resp = await client_http.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}")
                 file_info = file_info_resp.json()
-                
                 if file_info.get("ok"):
                     file_path = file_info["result"]["file_path"]
                     voice_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
                     user_text = await transcribe_audio_from_url(voice_url)
-                    
                     if not user_text:
-                        await send_telegram_message(chat_id, "Извините, я не смогла разобрать голосовое сообщение. Можете написать текстом? 🌸")
+                        await send_telegram_message(chat_id, "Извините, я не смогла разобрать голосовое сообщение.")
                         return {"status": "ok"}
             except Exception as e:
                 print(f"❌ Ошибка загрузки войса из Телеги: {e}")
@@ -142,16 +126,19 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     if not user_text:
          return {"status": "ok"}
 
-    # === ПЕРЕХВАТЧИК КОМАНД ОТ АРХИТЕКТОРА В ТЕЛЕГРАМЕ ===
+    # === ПЕРЕХВАТЧИК БОССА (ЩИТ ОТ БАГОВ) ===
     architect_tg_id = os.getenv("ARCHITECT_TG_ID")
     if architect_tg_id and chat_id == architect_tg_id:
         text_lower = user_text.strip().lower()
 
         if text_lower.startswith("1 ") or text_lower.startswith("2 "):
             parts = user_text.split(" ", 2)
+            if len(parts) < 2:
+                await send_telegram_message(chat_id, "❌ Ошибка формата. Укажите номер клиента.")
+                return {"status": "ok"}
+                
             client_phone = parts[1].strip()
             
-            # Ищем, клиент из Телеги или Ватсапа?
             check_res = await db.execute(select(Client).where(Client.chat_id == client_phone))
             tg_client = check_res.scalars().first()
             
@@ -162,21 +149,13 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 client_chat_id = f"{client_phone}@c.us"
                 is_telegram = False
 
-            # --- КОМАНДА 1 (ПОДТВЕРДИТЬ) ---
             if text_lower.startswith("1 "):
-                happy_msg = (
-                    "🎉 Отличные новости! Главный архитектор подтвердил наше время. "
-                    "Будем рады видеть вас в нашем офисе!\n\n"
-                    "📍 Наш адрес: г. Алматы, мкр. Самал-3, 15 к1\n"
-                    "🗺️ Построить маршрут в 2GIS: https://2gis.kz/almaty/geo/9430047375085700/76.956587,43.227737\n\n"
-                    "Если планы изменятся или будут вопросы — пишите, я всегда на связи. До встречи! 🌸"
-                )
+                happy_msg = "🎉 Отличные новости! Главный архитектор подтвердил наше время. Будем рады видеть вас в нашем офисе! 🌸"
                 if is_telegram:
                     await send_telegram_message(client_chat_id, happy_msg)
                 else:
                     await send_whatsapp_message(client_chat_id, happy_msg)
 
-                # Запись в память
                 result = await db.execute(select(Client).where(Client.chat_id == client_chat_id))
                 client_in_db = result.scalars().first()
                 if client_in_db:
@@ -186,31 +165,28 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await send_telegram_message(architect_tg_id, f"✅ Подтверждение успешно отправлено клиенту {client_phone}!")
                 return {"status": "ok"}
 
-            # --- КОМАНДА 2 (ПЕРЕНОС) ---
             elif text_lower.startswith("2 ") and len(parts) >= 3:
                 new_time_text = parts[2].strip()
-                reschedule_msg = (
-                    "🌸 Я переговорила с главным архитектором. К сожалению, прошлое время у него уже занято.\n\n"
-                    f"Но он выделил для вас **специальное личное окно: {new_time_text}**, чтобы вы могли детально обсудить проект без спешки.\n\n"
-                    "Подскажите, вам будет удобно подойти в это время?"
-                )
+                reschedule_msg = f"🌸 Я переговорила с главным архитектором. К сожалению, прошлое время занято. Но он выделил для вас специальное окно: {new_time_text}. Вам удобно?"
                 if is_telegram:
                     await send_telegram_message(client_chat_id, reschedule_msg)
                 else:
                     await send_whatsapp_message(client_chat_id, reschedule_msg)
 
-                # Запись в память
                 result = await db.execute(select(Client).where(Client.chat_id == client_chat_id))
                 client_in_db = result.scalars().first()
                 if client_in_db:
                     client_in_db.context += f"\n[СИСТЕМНОЕ СООБЩЕНИЕ]: Архитектор ПРЕДЛОЖИЛ ПЕРЕНОС времени на: {new_time_text}."
                     await db.commit()
                 
-                await send_telegram_message(architect_tg_id, f"🕒 Предложение о 'личном окне' отправлено клиенту {client_phone}!")
+                await send_telegram_message(architect_tg_id, f"🕒 Предложение о переносе отправлено клиенту {client_phone}!")
                 return {"status": "ok"}
+        else:
+            # ЕСЛИ БОСС ПИШЕТ ПРОСТО ТЕКСТ - БЛОКИРУЕМ!
+            await send_telegram_message(chat_id, "🤖 Босс, я понимаю только команды:\n✅ `1 [номер]` - подтвердить\n🕒 `2 [номер] [твое время]` - перенести")
+            return {"status": "ok"}
 
-
-    # --- 2. ИЩЕМ КЛИЕНТА В БАЗЕ ---
+    # --- ЛОГИКА ДЛЯ КЛИЕНТОВ В TELEGRAM ---
     result = await db.execute(select(Client).where(Client.chat_id == chat_id))
     client = result.scalars().first()
 
@@ -219,17 +195,13 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         db.add(client)
         await db.commit()
         await db.refresh(client)
-        print(f"🆕 В базу добавлен НОВЫЙ клиент (Telegram): {chat_id}")
 
-    # --- 3. ГЕНЕРИРУЕМ ОТВЕТ ТОМИРИС ---
     projects = await fetch_projects_from_sanity()
     
-    # 🚨 ИИ ТЕПЕРЬ ВОЗВРАЩАЕТ СЛОВАРЬ (JSON)
     ai_response_data = await generate_reply_with_ai(user_text, projects, client.context)
     ai_reply_text = ai_response_data.get("reply", "Простите, техническая заминка.")
     ai_action = ai_response_data.get("action", "none")
 
-    # 🛠️ БЕЗОПАСНАЯ ОБРЕЗКА КОНТЕКСТА (ПО СТРОКАМ) - СОХРАНЯЕМ ТОЛЬКО ТЕКСТ
     new_context = f"{client.context}\nКлиент: {user_text}\nТомирис: {ai_reply_text}"
     if len(new_context) > 2000:
         lines = new_context.split('\n')
@@ -237,31 +209,21 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     client.context = new_context
     await db.commit()
 
-    # --- СТРОГАЯ ПРОВЕРКА ПО СИСТЕМНОМУ СТАТУСУ (JSON ACTION) ---
-    # СИГНАЛ 1: ПЕРВАЯ АНКЕТА
     if ai_action == "new_booking":
-        print(f"🔔 БИНГО! Клиент готов. Генерируем анкету...")
         from app.services.ai import generate_client_summary
-        
-        clean_phone = chat_id.replace("@c.us", "") if "@c.us" in str(chat_id) else chat_id
-        
-        summary = await generate_client_summary(new_context, clean_phone)
+        summary = await generate_client_summary(new_context, chat_id, "Telegram")
         if architect_tg_id:
             await send_telegram_message(architect_tg_id, f"🔵 [НОВЫЙ ЛИД ИЗ TELEGRAM]\n{summary}")
             
-    # СИГНАЛ 2: КЛИЕНТ ПЕРЕНЕС ВРЕМЯ ИЛИ СОГЛАСИЛСЯ НА ПЕРЕНОС
     elif ai_action == "reschedule":
-        print(f"⚠️ Клиент обновил данные по времени!")
         if architect_tg_id:
-            clean_phone = chat_id.replace("@c.us", "") if "@c.us" in str(chat_id) else chat_id
             update_msg = (
-                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {clean_phone}</b>\n\n"
+                f"🟡 <b>ОБНОВЛЕНИЕ ПО КЛИЕНТУ: {chat_id}</b>\n\n"
                 f"<b>Ответ клиента:</b> <i>{user_text}</i>\n\n"
-                f"👇 <i>Для подтверждения отправьте:</i>\n<code>1 {clean_phone}</code>"
+                f"👇 <i>Для подтверждения отправьте:</i>\n<code>1 {chat_id}</code>"
             )
             await send_telegram_message(architect_tg_id, update_msg)
 
-    # --- 6. ОТПРАВЛЯЕМ ОТВЕТ КЛИЕНТУ В ТЕЛЕГРАМ ---
     await send_telegram_message(chat_id, ai_reply_text)
 
     return {"status": "ok"}
