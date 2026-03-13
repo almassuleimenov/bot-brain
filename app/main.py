@@ -159,7 +159,12 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 is_telegram = False
 
             if text_lower.startswith("1 "):
-                happy_msg = "🎉 Отличные новости! Главный архитектор подтвердил наше время. Будем рады видеть вас в нашем офисе! 🌸"
+                happy_msg = (
+                    "🎉 Отличные новости! Главный архитектор подтвердил наше время. "
+                    "Будем рады видеть вас в нашем офисе! 🌸\n\n"
+                    "📍 Наш адрес: г. Алматы, мкр. Самал-3, 15 к1\n"
+                    "🗺️ Построить маршрут в 2GIS: https://2gis.kz/almaty/geo/9430047375085700/76.956587,43.227737"
+                )
                 if is_telegram:
                     await send_telegram_message(client_chat_id, happy_msg)
                 else:
